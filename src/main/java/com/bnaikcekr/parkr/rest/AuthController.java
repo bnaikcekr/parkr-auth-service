@@ -1,30 +1,34 @@
 package com.bnaikcekr.parkr.rest;
 
+import com.bnaikcekr.parkr.config.SecurityConfig;
 import com.bnaikcekr.parkr.model.ParkerUser;
 import com.bnaikcekr.parkr.model.ParkerUserDetails;
 import com.bnaikcekr.parkr.model.ParkrUserAuthDTO;
 import com.bnaikcekr.parkr.model.ParkrUserRegisterDTO;
 import com.bnaikcekr.parkr.service.ParkrUserDetailService;
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwt;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.tomcat.util.http.parser.Authorization;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthenticationToken;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
 
 import javax.crypto.SecretKey;
-import java.util.Collections;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -35,6 +39,7 @@ public class AuthController {
 
     private final ParkrUserDetailService parkrUserDetailService;
     private final AuthenticationManager authManager;
+    private final JwtEncoder jwtEncoder;
 
 //    private static final long EXPIRATION = 3600; // 1 hour
     private static final long EXPIRATION = 300; // 5 minutes
@@ -42,10 +47,31 @@ public class AuthController {
 
     private Map<String, String> authTokenMap = new ConcurrentHashMap<>(); // In-memory storage for tokens
 
-    @GetMapping("/auth")
+    @GetMapping("/unsecured-endpoint")
     public String authUser() {
         return "Hello, this is a test endpoint for authentication!";
     }
+
+    @GetMapping("/secured-endpoint")
+    public String getSecuredResource(@RequestHeader("Authorization") String authToken) {
+        // authToken will contain the full header value, e.g., "Bearer eyJhbGci..."
+        // You might need to extract the actual token part if it's a Bearer token
+        String actualToken = authToken.replace("Bearer ", "");
+
+        // Now you can process the 'actualToken' for validation or other purposes
+        log.info("Received Auth Token: {}", actualToken);
+
+        return "Access granted with token: " + actualToken;
+    }
+
+    @GetMapping("/token")
+    public Token getToken(JwtAuthenticationToken jwtToken) {
+        return new Token(
+                jwtToken.getToken(),
+                jwtToken.getAuthorities()
+        );
+    }
+    public record Token(org.springframework.security.oauth2.jwt.Jwt token, Collection<GrantedAuthority> authorities){}
 
     @PostMapping("/auth")
     public ResponseEntity<ParkrUserAuthDTO> authenticate(@RequestBody ParkerUserDetails creds) throws Exception {
@@ -62,14 +88,16 @@ public class AuthController {
             // 4. If authentication is successful, generate JWT token
             String token  = authTokenMap.computeIfAbsent(authentication.getName(), k -> {
                 log.info("Token generated for user: {}", creds.getUsername());
-                return generateToken(authentication);
+                return generateJwtToken(authentication);
             });
 
-            Jwt jwt = Jwts.parser().verifyWith(SECRET).build().parse(token);
-            if( !((Claims)jwt.getPayload()).getExpiration().after(new Date())) {
-                log.info("Token expired for user: {} - generating new token", creds.getUsername());
-                authTokenMap.replace(authentication.getName(), token, generateToken(authentication));
+            try {
+                Jwt jwt = Jwts.parser().verifyWith(SecurityConfig.SECRET_KEY_PAIR.getPublic()).build().parse(token);
+            } catch (ExpiredJwtException expiredJwtException){
+                log.warn("Token expired for user: {} - generating new token", creds.getUsername());
+                authTokenMap.replace(authentication.getName(), token, generateJwtToken(authentication));
             }
+
             // Add token to header
             log.info("Authentication successful for user: {}", creds.getUsername());
             ParkrUserAuthDTO userDTO = ParkrUserAuthDTO.builder()
@@ -111,20 +139,18 @@ public class AuthController {
         return ResponseEntity.ok().build();
     }
 
-    //utility method to get the token for a user
-    private String generateToken(Authentication authentication) {
-        Long now = System.currentTimeMillis();
-        return Jwts.builder()
-                .setSubject(authentication.getName())
-                // Convert to list of strings.
-                // This is important because it affects the way we get them back in the Gateway.
+    public String generateJwtToken(Authentication authentication) {
+        Instant now = Instant.now();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer("https://parkr.bnaikcekr.com")
+                .issuedAt(now)
+                .expiresAt(now.plus(1, ChronoUnit.MINUTES))
+                .subject(authentication.getName())
                 .claim("authorities", authentication.getAuthorities().stream()
                         .map(GrantedAuthority::getAuthority).collect(Collectors.toList()))
-                .setIssuedAt(new Date(now))
-                .setExpiration(new Date(now + EXPIRATION * 1000))  // in milliseconds
-                .signWith(SECRET)
-                .compact();
-    }
+                .build();
 
+        return this.jwtEncoder.encode(JwtEncoderParameters.from(claims)).getTokenValue();
+    }
 }
 

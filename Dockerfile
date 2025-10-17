@@ -8,7 +8,7 @@
 
     FROM openjdk:17-jdk-slim
     WORKDIR /app
-    COPY --from=build /app/target/parker-auth-service-1.0-SNAPSHOT.jar /app/parker-auth-service.jar
+    COPY --from=build /app/target/parkr-auth-service-1.0-SNAPSHOT.jar /app/parkr-auth-service.jar
     EXPOSE 8080
     ENV SPRING_PROFILES_ACTIVE=renderer
-    ENTRYPOINT ["java", "-jar", "/app/service-parker.jar"]
+    ENTRYPOINT ["java", "-jar", "/app/parkr-auth-service.jar"]

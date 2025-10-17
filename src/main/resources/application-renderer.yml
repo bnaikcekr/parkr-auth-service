@@ -1,0 +1,5 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://dpg-d3ng1hbuibrs738cjhog-a:5432/parkerservice
+    username: parkerservice_user
+    password: meuOtBSc0RVm2SOcQxFi3mVZzv9auSCX
